@@ -1,45 +1,55 @@
-using System.Net;
 using System.Text.RegularExpressions;
 using Renci.SshNet;
 
 namespace DDoS_Autofix
 {
-    public partial class Form1 : System.Windows.Forms.Form
+    public partial class MainForm : System.Windows.Forms.Form
     {
         SshClient ssh;
         ShellStream stream;
         bool platform;
         private bool busy, terminationRequest = false;
-        List<string> entries = new List<string>();
-        public Form1()
+        readonly List<string> entries = [];
+        public MainForm()
         {
             InitializeComponent();
-            using (var client = new WebClient())
+        }
+        private async Task DownloadBlocklist()
+        {
+            const string url = "https://raw.githubusercontent.com/JeniCzech92/ddos-blocklist/main/blocklist.txt";
+            const string filePath = "blocklist.txt";
+
+            using var httpClient = new HttpClient();
+            try
             {
-                try
+                // Download the file content as a string
+                string content = await httpClient.GetStringAsync(url);
+
+                // Write the content to a file
+                await File.WriteAllTextAsync(filePath, content);
+
+                // Check if the file was created successfully
+                if (File.Exists(filePath))
                 {
-                    client.DownloadFile("https://raw.githubusercontent.com/JeniCzech92/ddos-blocklist/main/blocklist.txt", "blocklist.txt"); //currently hardcoded, might rework later if needed...
-                }
-                catch (Exception ex)
-                {
-                    UpdateLog("Download of blocklist failed: " + ex.Message);
-                }
-                if (File.Exists("blocklist.txt"))
-                {
-                    entries.AddRange(File.ReadAllLines("blocklist.txt"));
-                    UpdateLog("Ready! Please connect to the appliance.\r\nBlocklist file loaded. Added " + entries.Count.ToString() + " entries.");
+                    entries.AddRange(await File.ReadAllLinesAsync(filePath));
+                    UpdateLog($"Ready! Please connect to the appliance.\r\nBlocklist file loaded. Added {entries.Count} entries.");
                 }
                 else
                 {
-                    UpdateLog("blocklist file not found.");
-                    button1.Enabled = false;
+                    UpdateLog("Blocklist file not found.");
+                    btnConnect.Enabled = false;
                 }
+            }
+            catch (Exception ex)
+            {
+                UpdateLog($"Download of blocklist failed: {ex.Message}");
+                btnConnect.Enabled = false;
             }
         }
         public void UpdateLog(string msg)
         {
-            textBox4.Text = msg + "\r\n" + textBox4.Text;
-            textBox4.Select(textBox4.TextLength, 0);
+            tbLog.Text = msg + "\r\n" + tbLog.Text;
+            tbLog.Select(tbLog.TextLength, 0);
         }
         public void FormHandler(int a)
         {
@@ -47,64 +57,61 @@ namespace DDoS_Autofix
             {
                 case 0:
                     busy = false;
-                    textBox1.Enabled = true;
-                    textBox2.Enabled = true;
-                    textBox3.Enabled = true;
-                    numericUpDown1.Enabled = true;
-                    button1.Enabled = true;
-                    button2.Enabled = false;
-                    button3.Enabled = false;
-                    button4.Enabled = false;
+                    tbAddress.Enabled = true;
+                    tbAccount.Enabled = true;
+                    tbPassword.Enabled = true;
+                    nudPort.Enabled = true;
+                    btnConnect.Enabled = true;
+                    btnApply.Enabled = false;
+                    btnRemove.Enabled = false;
+                    btnDisconnect.Enabled = false;
                     break;
                 case 1:
                     busy = false;
-                    textBox1.Enabled = false;
-                    textBox2.Enabled = false;
-                    textBox3.Enabled = false;
-                    numericUpDown1.Enabled = false;
-                    button1.Enabled = false;
-                    button2.Enabled = true;
-                    button3.Enabled = true;
-                    button4.Enabled = true;
+                    tbAddress.Enabled = false;
+                    tbAccount.Enabled = false;
+                    tbPassword.Enabled = false;
+                    nudPort.Enabled = false;
+                    btnConnect.Enabled = false;
+                    btnApply.Enabled = true;
+                    btnRemove.Enabled = true;
+                    btnDisconnect.Enabled = true;
                     break;
                 case 2:
                     busy = true;
-                    textBox1.Enabled = false;
-                    textBox2.Enabled = false;
-                    textBox3.Enabled = false;
-                    numericUpDown1.Enabled = false;
-                    button1.Enabled = false;
-                    button2.Enabled = false;
-                    button3.Enabled = false;
-                    button4.Enabled = false;
+                    tbAddress.Enabled = false;
+                    tbAccount.Enabled = false;
+                    tbPassword.Enabled = false;
+                    nudPort.Enabled = false;
+                    btnConnect.Enabled = false;
+                    btnApply.Enabled = false;
+                    btnRemove.Enabled = false;
+                    btnDisconnect.Enabled = false;
                     break;
             }
         }
-
-
-        private void SelectAllText(object sender, EventArgs e)
+        private void SelectAllText(object? sender, EventArgs e)
         {
-            if (sender is TextBox)
+            if (sender is TextBox tb)
             {
-                TextBox tb = sender as TextBox;
                 tb.SelectAll();
             }
-            if (sender is NumericUpDown)
+            else if (sender is NumericUpDown n)
             {
-                NumericUpDown n = sender as NumericUpDown;
-                n.Select(0, n.Text.Length);
+                // Ensure that `n.Text` is not null before accessing `Length`
+                var text = n.Text ?? string.Empty;
+                n.Select(0, text.Length);
             }
-
         }
-        private async void button1_Click(object sender, EventArgs e)
+        private async void BtnConnect_Click(object sender, EventArgs e)
         {
             bool abort = false;
-            if (!Regex.Match(textBox1.Text, @"^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$").Success && !Regex.Match(textBox1.Text, @"^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$").Success)
+            if (!r_FQDNValidation().Match(tbAddress.Text).Success && !r_IPValidation().Match(tbAddress.Text).Success)
             {
                 MessageBox.Show("Please check the hostname.", "Hostname not valid", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 abort = true;
             }
-            if (!Regex.Match(textBox2.Text, @"^[a-zA-Z@._-][a-zA-Z0-9@._-]+$").Success)
+            if (!r_UsernameValidation().Match(tbAccount.Text).Success)
             {
                 MessageBox.Show("Please check the username.", "Username not valid", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 abort = true;
@@ -113,8 +120,8 @@ namespace DDoS_Autofix
             {
                 UpdateLog("Connecting...");
                 FormHandler(2);
-                ssh = new SshClient(textBox1.Text, Convert.ToInt32(numericUpDown1.Value), textBox2.Text, textBox3.Text);
-                textBox3.Text = "**********************";
+                ssh = new SshClient(tbAddress.Text, Convert.ToInt32(nudPort.Value), tbAccount.Text, tbPassword.Text);
+                tbPassword.Text = "**********************";
                 Task sshconnect = ssh.ConnectAsync(CancellationToken.None);
                 try
                 {
@@ -136,7 +143,7 @@ namespace DDoS_Autofix
                     {
                         UpdateLog("Insufficient privileges, disconnecting...");
                         ssh.Disconnect();
-                        textBox3.Text = "";
+                        tbPassword.Text = "";
                         FormHandler(0);
                     }
                 }
@@ -151,12 +158,12 @@ namespace DDoS_Autofix
                         UpdateLog("An error occured while connecting to host: " + ex.Message + "\r\n");
                     }
                     ssh.Disconnect();
-                    textBox3.Text = "";
+                    tbPassword.Text = "";
                     FormHandler(0);
                 }
             }
         }
-        private async void button4_Click(object sender, EventArgs e)
+        private async void BtnDisconnect_Click(object sender, EventArgs e)
         {
             FormHandler(2);
             if (platform)
@@ -171,29 +178,29 @@ namespace DDoS_Autofix
             }
             ssh.Disconnect();
             UpdateLog("Disconnected...");
-            textBox3.Text = "";
+            tbPassword.Text = "";
             FormHandler(0);
         }
-        private async void button2_Click(object sender, EventArgs e)
+        private async void BtnApplyPolicies_Click(object sender, EventArgs e)
         {
 
             UpdateLog("Applying...");
-            progressBar1.Visible = true;
-            progressBar1.Maximum = entries.Count * 2;
+            progressBar.Visible = true;
+            progressBar.Maximum = entries.Count * 2;
             FormHandler(2);
             if (platform)
             {
                 foreach (string entry in entries)
                 {
-                    if (entry.Contains("/")) await stream.Execute("object address-object address _autofix_" + entry.Replace("/", "_") + " type cidr " + entry);
+                    if (entry.Contains('/')) await stream.Execute("object address-object address _autofix_" + entry.Replace("/", "_") + " type cidr " + entry);
                     else await stream.Execute("object address-object address _autofix_" + " type host " + entry);
-                    progressBar1.Value++;
+                    progressBar.Value++;
                 }
                 await stream.Execute("object address-object group _autofix");
                 foreach (string entry in entries)
                 {
                     await stream.Execute("address-list _autofix_" + entry.Replace('/', '_'));
-                    progressBar1.Value++;
+                    progressBar.Value++;
                 }
                 UpdateLog("Entries updated...");
                 await stream.Execute("/");
@@ -201,9 +208,9 @@ namespace DDoS_Autofix
                 if (str == "show config vrf main secure-policy rule _autofix\r\ngw running config# ")
                 {
                     UpdateLog("Adding policy control rule...");
-                    progressBar1.Style = ProgressBarStyle.Marquee;
+                    progressBar.Style = ProgressBarStyle.Marquee;
                     await stream.UOSAddRule("_autofix");
-                    progressBar1.Style = ProgressBarStyle.Continuous;
+                    progressBar.Style = ProgressBarStyle.Continuous;
                 }
                 else await stream.Execute("commit");
                 UpdateLog("Done...");
@@ -213,8 +220,8 @@ namespace DDoS_Autofix
                 foreach (string entry in entries)
                 {
                     await stream.Execute("address-object _autofix_" + entry.Replace('/', '_') + " " + entry);
-                    progressBar1.Value++;
-                    progressBar1.Value++;
+                    progressBar.Value++;
+                    progressBar.Value++;
                 }
                 await stream.Execute("object-group address _autofix");
                 foreach (string entry in entries)
@@ -224,14 +231,13 @@ namespace DDoS_Autofix
                 await stream.Execute("exit");
                 UpdateLog("Entries updated...");
                 string str = await stream.Execute("show secure-policy");
-                if (Regex.IsMatch(str, "name: _autofix"))
+                if (r_PolicyRuleCheckIfExists().IsMatch(str))
                 {
                     UpdateLog("Relevant security policy already exists, skipping...");
-                    if (!Regex.IsMatch(str, @"secure-policy rule:\s*1\s*name:\s*_autofix", RegexOptions.Multiline)) UpdateLog("NOTICE: The _autofix policy rule does not have the highest priority! If this is not intentional, please adjust your policy control settings!");
+                    if (!r_PolicyRuleCheckIfFirst().IsMatch(str)) UpdateLog("NOTICE: The _autofix policy rule does not have the highest priority! If this is not intentional, please adjust your policy control settings!");
                 }
                 else
                 {
-                    str = await stream.Execute("show secure-policy");
                     await stream.Execute("secure-policy insert 1");
                     await stream.Execute("name _autofix");
                     await stream.Execute("from WAN");
@@ -241,16 +247,16 @@ namespace DDoS_Autofix
                     UpdateLog("Blocking security policy created on index #1...");
                 }
             }
-            progressBar1.Visible = false;
-            progressBar1.Value = 0;
+            progressBar.Visible = false;
+            progressBar.Value = 0;
             FormHandler(1);
         }
-        private async void button3_Click(object sender, EventArgs e)
+        private async void BtnRemovePolicies_Click(object sender, EventArgs e)
         {
             FormHandler(2);
             string str;
             UpdateLog("Removing...");
-            progressBar1.Visible = true;
+            progressBar.Visible = true;
             if (platform)
             {
                 await stream.Execute("vrf main secure-policy");
@@ -260,13 +266,13 @@ namespace DDoS_Autofix
                 await stream.Execute("del group _autofix");
                 await stream.Execute("/");
                 str = await stream.Execute("show config object address-object address");
-                MatchCollection delete = Regex.Matches(str, @"_autofix_\S+");
+                MatchCollection delete = r_AddressObjects().Matches(str);
                 await stream.Execute("object address-object");
-                progressBar1.Maximum = delete.Count;
+                progressBar.Maximum = delete.Count;
                 foreach (Match match in delete)
                 {
                     await stream.Execute("del address " + match);
-                    progressBar1.Value++;
+                    progressBar.Value++;
                 }
                 await stream.Execute("/");
                 await stream.Execute("commit");
@@ -276,32 +282,31 @@ namespace DDoS_Autofix
             else
             {
                 str = await stream.Execute("show secure-policy");
-                Match m = Regex.Match(str, @"secure-policy rule:\s*(\d+)\s*name:\s*_autofix", RegexOptions.Multiline);
+                Match m = r_PolicyRuleFindIndex().Match(str);
                 if (m.Success)
                 {
-                    str = Regex.Match(m.Value, "(\\d+)").Value;
-                    await stream.Execute("no secure-policy "+ str);
-                    UpdateLog("Removed relevant security policy on index #"+str+"...");
+                    str = r_PolicyGetIndex().Match(m.Value).Value;
+                    await stream.Execute("no secure-policy " + str);
+                    UpdateLog("Removed relevant security policy on index #" + str + "...");
                 }
                 else
                     UpdateLog("No relevant security policy found, skipping...");
                 await stream.Execute("no object-group address _autofix");
                 str = await stream.Execute("show address-object");
-                MatchCollection delete = Regex.Matches(str, @"_autofix_\S+");
-                progressBar1.Maximum = delete.Count;
+                MatchCollection delete = r_AddressObjects().Matches(str);
+                progressBar.Maximum = delete.Count;
                 foreach (Match match in delete)
                 {
                     await stream.Execute("no address-object " + match);
-                    progressBar1.Value++;
+                    progressBar.Value++;
                 }
                 UpdateLog("Removed " + delete.Count.ToString() + " entries...");
             }
-            progressBar1.Visible = false;
-            progressBar1.Value = 0;
+            progressBar.Visible = false;
+            progressBar.Value = 0;
             FormHandler(1);
         }
-
-        private async void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        private async void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
             if (!terminationRequest && busy)
             {
@@ -316,15 +321,36 @@ namespace DDoS_Autofix
             }
             else if (terminationRequest && busy) e.Cancel = true;
         }
+        private async void MainForm_Load(object sender, EventArgs e)
+        {
+            await DownloadBlocklist();
+        }
+
+        [GeneratedRegex(@"^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$")]
+        private static partial Regex r_FQDNValidation();
+        [GeneratedRegex(@"^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$")]
+        private static partial Regex r_IPValidation();
+        [GeneratedRegex(@"^[a-zA-Z@._-][a-zA-Z0-9@._-]+$")]
+        private static partial Regex r_UsernameValidation();
+        [GeneratedRegex("name: _autofix")]
+        private static partial Regex r_PolicyRuleCheckIfExists();
+        [GeneratedRegex(@"secure-policy rule:\s*1\s*name:\s*_autofix", RegexOptions.Multiline)]
+        private static partial Regex r_PolicyRuleCheckIfFirst();
+        [GeneratedRegex(@"secure-policy rule:\s*(\d+)\s*name:\s*_autofix", RegexOptions.Multiline)]
+        private static partial Regex r_PolicyRuleFindIndex();
+        [GeneratedRegex("(\\d+)")]
+        private static partial Regex r_PolicyGetIndex();
+        [GeneratedRegex(@"_autofix_\S+")]
+        private static partial Regex r_AddressObjects();
     }
-    public static class Extensions
+    public static partial class Extensions
     {
         public static async Task<bool> GetPlatform(this ShellStream stream)
         {
             var task = Task.Run(() => stream.Expect("> "));
             await task;
             string str = await stream.Execute("show version", false);
-            if (Regex.IsMatch(str, "Zyxel Communications Corp"))
+            if (r_VersionCheck().IsMatch(str))
                 return false;
             else
                 return true;
@@ -334,7 +360,7 @@ namespace DDoS_Autofix
             if (platform)
             {
                 string str = await stream.Execute("show config object user-object admin", false);
-                if (Regex.IsMatch(str, "ERROR: "))
+                if (r_PermissionCheck().IsMatch(str))
                     return false;
                 else
                     return true;
@@ -342,7 +368,7 @@ namespace DDoS_Autofix
             else
             {
                 string str = await stream.Execute("show running-config", false); //may be risky...
-                if (Regex.IsMatch(str, "ERROR: "))
+                if (r_PermissionCheck().IsMatch(str))
                     return false;
                 else
                     return true;
@@ -352,27 +378,27 @@ namespace DDoS_Autofix
         {
             await stream.Execute("/");
             string str = await stream.Execute("show config vrf main secure-policy rule");
-            List<string[]> rules = new List<string[]>();
-            var matches = Regex.Matches(str, @"(?s)(rule .*?^\s*\.\.)", RegexOptions.Multiline);
+            List<string[]> rules = [];
+            var matches = r_GetPolicyControlRules().Matches(str);
 
             foreach (Match match in matches)
             {
-                string ruleName2 = Regex.Match(match.Value, @"rule\s+(\S+)").Groups[1].Value;
-                string user = Regex.Match(match.Value, @"user\s+(\S+)").Groups[1].Value;
-                string schedule = Regex.Match(match.Value, @"schedule\s+(\S+)").Groups[1].Value;
-                string from = Regex.Match(match.Value, @"from\s+(\S+)").Groups[1].Value;
-                string sourceIp = Regex.Match(match.Value, @"source-ip\s+(\S+)").Groups[1].Value;
-                string to = Regex.Match(match.Value, @"to\s+(\S+)").Groups[1].Value;
-                string destinationIp = Regex.Match(match.Value, @"destination-ip\s+(\S+)").Groups[1].Value;
-                string service = Regex.Match(match.Value, @"service\s+(\S+)").Groups[1].Value;
-                string action = Regex.Match(match.Value, @"action\s+(\S+)").Groups[1].Value;
-                string logging = Regex.Match(match.Value, @"logging\s+(\S+)").Groups[1].Value;
-                string contentFilterProfile = Regex.Match(match.Value, @"content-filter-profile\s+(.+)").Groups[1].Value.Trim();
-                string sslInspectionProfile = Regex.Match(match.Value, @"ssl-inspection-profile\s+(.+)").Groups[1].Value.Trim();
-                string appPatrolProfile = Regex.Match(match.Value, @"app-patrol-profile\s+(.+)").Groups[1].Value.Trim();
-                string description = Regex.Match(match.Value, @"description\s+(\S+)").Groups[1].Value;
-                string enabled = Regex.Match(match.Value, @"enabled\s+(\S+)").Groups[1].Value;
-                string[] vals = {ruleName2, user, schedule, from, sourceIp, to, destinationIp, service, action, logging, contentFilterProfile, sslInspectionProfile, appPatrolProfile, description, enabled};
+                string ruleName2 = r_GetRuleName().Match(match.Value).Groups[1].Value;
+                string user = r_GetUser().Match(match.Value).Groups[1].Value;
+                string schedule = r_GetSchedule().Match(match.Value).Groups[1].Value;
+                string from = r_GetZoneSrc().Match(match.Value).Groups[1].Value;
+                string sourceIp = r_GetIPSrc().Match(match.Value).Groups[1].Value;
+                string to = r_GetZoneDst().Match(match.Value).Groups[1].Value;
+                string destinationIp = r_GetIPDst().Match(match.Value).Groups[1].Value;
+                string service = r_GetSvc().Match(match.Value).Groups[1].Value;
+                string action = r_GetAction().Match(match.Value).Groups[1].Value;
+                string logging = r_GetLogging().Match(match.Value).Groups[1].Value;
+                string contentFilterProfile = r_GetCFProfile().Match(match.Value).Groups[1].Value.Trim();
+                string sslInspectionProfile = r_GetSSLProfile().Match(match.Value).Groups[1].Value.Trim();
+                string appPatrolProfile = r_GetAPPProfile().Match(match.Value).Groups[1].Value.Trim();
+                string description = r_GetDesc().Match(match.Value).Groups[1].Value;
+                string enabled = r_GetEnabled().Match(match.Value).Groups[1].Value;
+                string[] vals = [ruleName2, user, schedule, from, sourceIp, to, destinationIp, service, action, logging, contentFilterProfile, sslInspectionProfile, appPatrolProfile, description, enabled];
                 rules.Add(vals);
             }
             await stream.Execute("vrf main secure-policy");
@@ -410,23 +436,49 @@ namespace DDoS_Autofix
         }
         public static async Task<string> Execute(this ShellStream stream, string command, bool superuser = true)
         {
-            string str=null;
+            ArgumentNullException.ThrowIfNull(stream);
+            ArgumentNullException.ThrowIfNull(command);
             stream.WriteLine(command);
-            if (superuser)
-            {
-                var task = Task.Run(() => str = stream.Expect("# "));
-                await task;
-                return str;
-
-            }
-            else
-            {
-                var task = Task.Run(() => str = stream.Expect("> "));
-                await task;
-                return str;
-            }
+            string prompt = superuser ? "# " : "> ";
+            string? result = await Task.Run(() => stream.Expect(prompt));
+            return result ?? string.Empty;
         }
+
+        [GeneratedRegex("Zyxel Communications Corp")]
+        private static partial Regex r_VersionCheck();
+        [GeneratedRegex("ERROR: ")]
+        private static partial Regex r_PermissionCheck();
+        [GeneratedRegex(@"(?s)(rule .*?^\s*\.\.)", RegexOptions.Multiline)]
+        private static partial Regex r_GetPolicyControlRules();
+        [GeneratedRegex(@"rule\s+(\S+)")]
+        private static partial Regex r_GetRuleName();
+        [GeneratedRegex(@"user\s+(\S+)")]
+        private static partial Regex r_GetUser();
+        [GeneratedRegex(@"schedule\s+(\S+)")]
+        private static partial Regex r_GetSchedule();
+        [GeneratedRegex(@"from\s+(\S+)")]
+        private static partial Regex r_GetZoneSrc();
+        [GeneratedRegex(@"source-ip\s+(\S+)")]
+        private static partial Regex r_GetIPSrc();
+        [GeneratedRegex(@"to\s+(\S+)")]
+        private static partial Regex r_GetZoneDst();
+        [GeneratedRegex(@"destination-ip\s+(\S+)")]
+        private static partial Regex r_GetIPDst();
+        [GeneratedRegex(@"service\s+(\S+)")]
+        private static partial Regex r_GetSvc();
+        [GeneratedRegex(@"action\s+(\S+)")]
+        private static partial Regex r_GetAction();
+        [GeneratedRegex(@"logging\s+(\S+)")]
+        private static partial Regex r_GetLogging();
+        [GeneratedRegex(@"content-filter-profile\s+(.+)")]
+        private static partial Regex r_GetCFProfile();
+        [GeneratedRegex(@"ssl-inspection-profile\s+(.+)")]
+        private static partial Regex r_GetSSLProfile();
+        [GeneratedRegex(@"app-patrol-profile\s+(.+)")]
+        private static partial Regex r_GetAPPProfile();
+        [GeneratedRegex(@"description\s+(\S+)")]
+        private static partial Regex r_GetDesc();
+        [GeneratedRegex(@"enabled\s+(\S+)")]
+        private static partial Regex r_GetEnabled();
     }
-
-
 }
