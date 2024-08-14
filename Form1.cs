@@ -1,9 +1,6 @@
-using System.Formats.Asn1;
 using System.Net;
 using System.Text.RegularExpressions;
 using Renci.SshNet;
-using Windows.Foundation.Collections;
-using Windows.System.Update;
 
 namespace DDoS_Autofix
 {
@@ -12,6 +9,7 @@ namespace DDoS_Autofix
         SshClient ssh;
         ShellStream stream;
         bool platform;
+        private bool busy, terminationRequest = false;
         List<string> entries = new List<string>();
         public Form1()
         {
@@ -29,7 +27,7 @@ namespace DDoS_Autofix
                 if (File.Exists("blocklist.txt"))
                 {
                     entries.AddRange(File.ReadAllLines("blocklist.txt"));
-                    UpdateLog("Blocklist file loaded. Added " + entries.Count.ToString() + " entries.\r\nReady! Please connect to the appliance.");
+                    UpdateLog("Ready! Please connect to the appliance.\r\nBlocklist file loaded. Added " + entries.Count.ToString() + " entries.");
                 }
                 else
                 {
@@ -48,6 +46,7 @@ namespace DDoS_Autofix
             switch (a)
             {
                 case 0:
+                    busy = false;
                     textBox1.Enabled = true;
                     textBox2.Enabled = true;
                     textBox3.Enabled = true;
@@ -58,6 +57,7 @@ namespace DDoS_Autofix
                     button4.Enabled = false;
                     break;
                 case 1:
+                    busy = false;
                     textBox1.Enabled = false;
                     textBox2.Enabled = false;
                     textBox3.Enabled = false;
@@ -68,6 +68,7 @@ namespace DDoS_Autofix
                     button4.Enabled = true;
                     break;
                 case 2:
+                    busy = true;
                     textBox1.Enabled = false;
                     textBox2.Enabled = false;
                     textBox3.Enabled = false;
@@ -160,8 +161,8 @@ namespace DDoS_Autofix
             FormHandler(2);
             if (platform)
             {
-                await stream.Execute("exit",false);
-                await stream.Execute("exit",false);
+                await stream.Execute("exit", false);
+                await stream.Execute("exit", false);
             }
             else
             {
@@ -178,7 +179,7 @@ namespace DDoS_Autofix
 
             UpdateLog("Applying...");
             progressBar1.Visible = true;
-            progressBar1.Maximum = entries.Count*2;
+            progressBar1.Maximum = entries.Count * 2;
             FormHandler(2);
             if (platform)
             {
@@ -194,11 +195,18 @@ namespace DDoS_Autofix
                     await stream.Execute("address-list _autofix_" + entry.Replace('/', '_'));
                     progressBar1.Value++;
                 }
-                UpdateLog("Entries updated..."); //TODO: could be more verbose...
+                UpdateLog("Entries updated...");
                 await stream.Execute("/");
                 string str = await stream.Execute("show config vrf main secure-policy rule _autofix");
-                if (str == "show config vrf main secure-policy rule _autofix\r\ngw running config# ") await stream.uOSAddRule("_autofix");
-                await stream.Execute("commit");
+                if (str == "show config vrf main secure-policy rule _autofix\r\ngw running config# ")
+                {
+                    UpdateLog("Adding policy control rule...");
+                    progressBar1.Style = ProgressBarStyle.Marquee;
+                    await stream.UOSAddRule("_autofix");
+                    progressBar1.Style = ProgressBarStyle.Continuous;
+                }
+                else await stream.Execute("commit");
+                UpdateLog("Done...");
             }
             else
             {
@@ -214,20 +222,23 @@ namespace DDoS_Autofix
                     await stream.Execute("address-object _autofix_" + entry.Replace('/', '_'));
                 }
                 await stream.Execute("exit");
-                UpdateLog("Entries updated..."); //TODO: could be more verbose...
-                string str = await stream.Execute("show secure-policy 1");
+                UpdateLog("Entries updated...");
+                string str = await stream.Execute("show secure-policy");
                 if (Regex.IsMatch(str, "name: _autofix"))
+                {
                     UpdateLog("Relevant security policy already exists, skipping...");
+                    if (!Regex.IsMatch(str, @"secure-policy rule:\s*1\s*name:\s*_autofix", RegexOptions.Multiline)) UpdateLog("NOTICE: The _autofix policy rule does not have the highest priority! If this is not intentional, please adjust your policy control settings!");
+                }
                 else
                 {
-                    //TODO: could be more dynamic...
+                    str = await stream.Execute("show secure-policy");
                     await stream.Execute("secure-policy insert 1");
                     await stream.Execute("name _autofix");
                     await stream.Execute("from WAN");
                     await stream.Execute("sourceip _autofix");
                     await stream.Execute("action deny");
                     await stream.Execute("exit");
-                    UpdateLog("Blocking security policy created on position #1...");
+                    UpdateLog("Blocking security policy created on index #1...");
                 }
             }
             progressBar1.Visible = false;
@@ -264,12 +275,13 @@ namespace DDoS_Autofix
             }
             else
             {
-                str = await stream.Execute("show secure-policy 1");
-                if (Regex.IsMatch(str, "name: _autofix"))
+                str = await stream.Execute("show secure-policy");
+                Match m = Regex.Match(str, @"secure-policy rule:\s*(\d+)\s*name:\s*_autofix", RegexOptions.Multiline);
+                if (m.Success)
                 {
-                    //TODO: could be more dynamic...
-                    await stream.Execute("no secure-policy 1");
-                    UpdateLog("Removed relevant security policy...");
+                    str = Regex.Match(m.Value, "(\\d+)").Value;
+                    await stream.Execute("no secure-policy "+ str);
+                    UpdateLog("Removed relevant security policy on index #"+str+"...");
                 }
                 else
                     UpdateLog("No relevant security policy found, skipping...");
@@ -288,18 +300,34 @@ namespace DDoS_Autofix
             progressBar1.Value = 0;
             FormHandler(1);
         }
+
+        private async void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            if (!terminationRequest && busy)
+            {
+                terminationRequest = true;
+                e.Cancel = true;
+                UpdateLog("Termination request received, will close once the current task is finished...");
+                while (busy)
+                {
+                    await Task.Delay(100);
+                }
+                this.Close();
+            }
+            else if (terminationRequest && busy) e.Cancel = true;
+        }
     }
     public static class Extensions
     {
-        public static async Task<bool> GetPlatform(this ShellStream stream) //Probably could use a better handling...
+        public static async Task<bool> GetPlatform(this ShellStream stream)
         {
-            var task = Task.Run(() => stream.Expect("> ")); //wait until the initial prompt...
+            var task = Task.Run(() => stream.Expect("> "));
             await task;
             string str = await stream.Execute("show version", false);
-            if (Regex.IsMatch(str, "Zyxel Communications Corp")) //probably not the best check...
-                return false; //We're on ZLD
+            if (Regex.IsMatch(str, "Zyxel Communications Corp"))
+                return false;
             else
-                return true; //We're on uOS, or at the very least, we're not on ZLD...
+                return true;
         }
         public static async Task<bool> CheckPermissions(this ShellStream stream, bool platform)
         {
@@ -320,7 +348,7 @@ namespace DDoS_Autofix
                     return true;
             }
         }
-        public static async Task uOSAddRule(this ShellStream stream, string ruleName)
+        public static async Task UOSAddRule(this ShellStream stream, string ruleName)
         {
             await stream.Execute("/");
             string str = await stream.Execute("show config vrf main secure-policy rule");
@@ -354,10 +382,12 @@ namespace DDoS_Autofix
             await stream.Execute("action deny");
             await stream.Execute("source-ip " + ruleName);
             await stream.Execute("from WAN");
-            await stream.Execute("/");
+            await stream.Execute("..");
+            await stream.Execute("enabled false"); //phew... daredevil...
+            await stream.Execute("commit");
             foreach (string[] rule in rules)
             {
-                await stream.Execute("vrf main secure-policy rule " + rule[0]);
+                await stream.Execute("rule " + rule[0]);
                 await stream.Execute("user " + rule[1]);
                 await stream.Execute("schedule " + rule[2]);
                 await stream.Execute("from " + rule[3]);
@@ -372,8 +402,11 @@ namespace DDoS_Autofix
                 await stream.Execute("app-patrol-profile " + rule[12]);
                 await stream.Execute("description " + rule[13]);
                 await stream.Execute("enabled " + rule[14]);
-                await stream.Execute("/");
+                await stream.Execute("..");
             }
+            await stream.Execute("enabled true");
+            await stream.Execute("commit");
+            await stream.Execute("/");
         }
         public static async Task<string> Execute(this ShellStream stream, string command, bool superuser = true)
         {
