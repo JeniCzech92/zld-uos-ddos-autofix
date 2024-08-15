@@ -5,11 +5,11 @@ namespace DDoS_Autofix
 {
     public partial class MainForm : System.Windows.Forms.Form
     {
-        SshClient ssh;
-        ShellStream stream;
-        bool platform;
+        private SshClient? ssh;
+        private ShellStream stream;
+        private bool platform;
         private bool busy, terminationRequest = false;
-        readonly List<string> entries = [];
+        private readonly List<string> entries = [];
         public MainForm()
         {
             InitializeComponent();
@@ -176,7 +176,7 @@ namespace DDoS_Autofix
                 await stream.Execute("exit");
                 await stream.Execute("exit");
             }
-            ssh.Disconnect();
+            ssh?.Disconnect();
             UpdateLog("Disconnected...");
             tbPassword.Text = "";
             FormHandler(0);
@@ -209,7 +209,14 @@ namespace DDoS_Autofix
                 {
                     UpdateLog("Adding policy control rule...");
                     progressBar.Style = ProgressBarStyle.Marquee;
-                    await stream.UOSAddRule("_autofix");
+                    //await stream.UOSAddRule("_autofix"); not using this now...
+                    await stream.Execute("vrf main secure-policy rule _autofix");
+                    await stream.Execute("action deny");
+                    await stream.Execute("source-ip _autofix");
+                    await stream.Execute("from WAN");
+                    await stream.Execute("commit");
+                    UpdateLog("ATTENTION: For uOS devices, please move the policy control rule to highest priority manually within the WebGUI!");
+                    //but the above instead...
                     progressBar.Style = ProgressBarStyle.Continuous;
                 }
                 else await stream.Execute("commit");
@@ -374,7 +381,7 @@ namespace DDoS_Autofix
                     return true;
             }
         }
-        public static async Task UOSAddRule(this ShellStream stream, string ruleName)
+        /*public static async Task UOSAddRule(this ShellStream stream, string ruleName)
         {
             await stream.Execute("/");
             string str = await stream.Execute("show config vrf main secure-policy rule");
@@ -433,7 +440,7 @@ namespace DDoS_Autofix
             await stream.Execute("enabled true");
             await stream.Execute("commit");
             await stream.Execute("/");
-        }
+        }*/
         public static async Task<string> Execute(this ShellStream stream, string command, bool superuser = true)
         {
             ArgumentNullException.ThrowIfNull(stream);
@@ -448,7 +455,7 @@ namespace DDoS_Autofix
         private static partial Regex r_VersionCheck();
         [GeneratedRegex("ERROR: ")]
         private static partial Regex r_PermissionCheck();
-        [GeneratedRegex(@"(?s)(rule .*?^\s*\.\.)", RegexOptions.Multiline)]
+        /*[GeneratedRegex(@"(?s)(rule .*?^\s*\.\.)", RegexOptions.Multiline)]
         private static partial Regex r_GetPolicyControlRules();
         [GeneratedRegex(@"rule\s+(\S+)")]
         private static partial Regex r_GetRuleName();
@@ -479,6 +486,6 @@ namespace DDoS_Autofix
         [GeneratedRegex(@"description\s+(\S+)")]
         private static partial Regex r_GetDesc();
         [GeneratedRegex(@"enabled\s+(\S+)")]
-        private static partial Regex r_GetEnabled();
+        private static partial Regex r_GetEnabled();*/
     }
 }
